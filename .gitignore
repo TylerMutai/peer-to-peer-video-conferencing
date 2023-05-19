@@ -1,2 +1,3 @@
 .idea/
-peer-to-peer streaming.iml
+node_modules/
+peer-to-peer-streaming.iml

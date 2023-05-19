@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebRTC with Socket.io</title>
+  <link rel="stylesheet" href="/index.css">
+</head>
+<body>
+<video class="video" id="localVideo" autoplay playsinline muted></video>
+<div id="remoteVideos"></div>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  const socket = io();
+  const roomId = 'test-room';
+  const localVideo = document.getElementById('localVideo');
+  const remoteVideos = document.getElementById('remoteVideos');
+  const configuration = {iceServers: [{urls: 'stun:stun.l.google.com:19302'}]};
+
+  const peers = {};
+
+  function createPeerConnection(senderId, ontrack) {
+    const pc = new RTCPeerConnection(configuration);
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        socket.emit('icecandidate', {receiverId: senderId, candidate: event.candidate});
+      }
+    };
+
+    pc.ontrack = ontrack;
+
+    return pc;
+  }
+
+  function createOffer(senderId) {
+    const pc = peers[senderId];
+    navigator.mediaDevices.getUserMedia({video: true, audio: true})
+      .then((stream) => {
+        localVideo.srcObject = stream;
+        stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+        pc.createOffer()
+          .then(offer => pc.setLocalDescription(offer))
+          .then(() => {
+            socket.emit('offer', {receiverId: senderId, offer: pc.localDescription});
+          });
+      });
+  }
+
+  socket.on('connect', () => {
+    socket.emit('join-room', roomId);
+  });
+
+  socket.on('peer-connected', (data) => {
+    const clientId = data.clientId;
+    const remoteVideo = document.createElement('video');
+    remoteVideo.id = `remoteVideo_${clientId}`;
+    remoteVideo.classList.add("video")
+    remoteVideo.autoplay = true;
+    remoteVideo.playsInline = true;
+    remoteVideos.appendChild(remoteVideo);
+
+    peers[clientId] = createPeerConnection(clientId, (event) => {
+      remoteVideo.srcObject = event.streams[0];
+    });
+    createOffer(clientId);
+  });
+
+  socket.on('offer', async (data) => {
+    const senderId = data.senderId;
+    const pc = peers[senderId];
+    await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    socket.emit('answer', {receiverId: senderId, answer});
+  });
+
+  socket.on('answer', async (data) => {
+    const senderId = data.senderId;
+    const pc = peers[senderId];
+    if (pc) {
+      await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+    }
+  });
+
+  socket.on('icecandidate', (data) => {
+    const senderId = data.senderId;
+    const pc = peers[senderId];
+    if (pc) {
+      pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+    }
+  });
+
+  socket.on('peer-disconnected', (data) => {
+    const clientId = data.clientId;
+    const videoElement = document.getElementById(`remoteVideo_${clientId}`);
+    if (videoElement) {
+      videoElement.remove();
+    }
+    if (peers[clientId]) {
+      peers[clientId].close();
+      delete peers[clientId];
+    }
+  });
+</script>
+</body>
+</html>
